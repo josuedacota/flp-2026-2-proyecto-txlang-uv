@@ -1,5 +1,5 @@
 #lang eopl
-;Autores: Nombre1 Codigo1, Nombre2 Codigo2, ...
+;Autores: Josue David Cocoma Tascon 2477087, Juan Diego Montaño Vergara 2477334 
 
 #|
   Batería de pruebas del interpretador de TxLang-UV.
@@ -83,6 +83,69 @@
 ;; (prueba "let y suma" "let a = 1, b = 2 in +(a, b) end" "3")
 ;; (prueba "una celda" "let c = ref(0) in begin set c := 5; deref(c) end end" "5")
 ;; (prueba-rechazo "if con prueba no booleana" "if 1 then 2 else 3 end")
+
+(ida-y-vuelta "unparse: literales de cada clase"
+  "let a = 3.14, b = -7, c = 'x', d = \"hola mundo\", e = true, f = unit in a end")
+(ida-y-vuelta "unparse: comentarios de línea y de bloque"
+  "// comentario de línea
+   #| comentario
+      de bloque |#
+   +(1, 2) // otro")
+(ida-y-vuelta "unparse: if con varios elif"
+  "if true then 1 elif false then 2 elif true then 3 else 4 end")
+(ida-y-vuelta "unparse: proc con tipos de orden superior"
+  "let f = proc (g: (int, bool -> unit), r: ref(ref(float))) 1 end in apply f (2, 3) end")
+(ida-y-vuelta "unparse: letrec con recursión mutua"
+  "letrec bool par (n: int) = if ==(n, 0) then true else apply impar (-(n, 1)) end
+          bool impar (n: int) = if ==(n, 0) then false else apply par (-(n, 1)) end
+   in apply par (4) end")
+(ida-y-vuelta "unparse: record, new y field"
+  "record Cuenta { titular: string, saldo: ref(int) }
+   let c = new Cuenta { titular = \"Ana\", saldo = ref(300) } in deref(field(c, saldo)) end")
+(ida-y-vuelta "unparse: atomic anidado"
+  "atomic begin atomic abort(\"x\") onfail (m) print(m) end; 1 end onfail (m) -1 end")
+
+;; Rechazos del parser 
+(prueba-rechazo "parser: | dentro de un comentario de bloque" "#| a | b |# 1")
+(prueba-rechazo "parser: if sin else" "if true then 1 end")
+(prueba-rechazo "parser: palabra reservada como identificador" "let let = 1 in 2 end")
+
+(prueba "literal flotante" "3.14" "3.14")
+(prueba "literal cadena" "\"hola\"" "hola")
+(prueba "literal carácter" "'a'" "a")
+(prueba "comentarios no cambian el valor" "// hola
+  #| bloque |# 5" "5")
+
+;; Primitivas
+(prueba "suma" "+(1, 2)" "3")
+(prueba "resta con negativo literal" "-(5, -3)" "8")
+(prueba "multiplicación" "*(6, 7)" "42")
+(prueba "división entera" "/(7, 2)" "3")
+(prueba "resto" "%(7, 2)" "1")
+(prueba "suma de flotantes" "+(1.5, 2.5)" "4.0")
+(prueba "división de flotantes" "/(1.0, 4.0)" "0.25")
+(prueba-rechazo "división por cero entera" "/(1, 0)")
+(prueba-rechazo "resto por cero" "%(1, 0)")
+(prueba-rechazo "división por cero flotante" "/(1.0, 0.0)")
+(prueba-rechazo "suma de int y float" "+(1, 2.5)")
+(prueba-rechazo "resto con flotantes" "%(5.0, 2.0)")
+(prueba "menor" "<(1, 2)" "true")
+(prueba "mayor o igual" ">=(2, 2)" "true")
+(prueba "igualdad de cadenas" "==(\"a\", \"a\")" "true")
+(prueba "diferente" "!=(1, 2)" "true")
+(prueba-rechazo "igualdad entre int y float" "==(1, 1.0)")
+(prueba "and" "and(true, false)" "false")
+(prueba "or" "or(false, true)" "true")
+(prueba "not" "not(true)" "false")
+(prueba-rechazo "not con un entero" "not(1)")
+(prueba "concat" "concat(\"ho\", \"la\")" "hola")
+(prueba "length" "length(\"hola\")" "4")
+(prueba "to-string" "to-string(42)" "42")
+(prueba "to-number entero" "to-number(\"42\")" "42")
+(prueba "to-number flotante" "to-number(\"3.5\")" "3.5")
+(prueba-rechazo "to-number de texto no numérico" "to-number(\"abc\")")
+(prueba "print devuelve unit" "print(\"hola\")" "unit")
+(prueba-rechazo "aridad: + con un argumento" "+(1)")
 
 ;;; ==========================================================
 ;;; Segunda entrega: transacciones, registros y tipos
