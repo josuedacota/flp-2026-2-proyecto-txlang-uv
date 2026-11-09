@@ -147,6 +147,87 @@
 (prueba "print devuelve unit" "print(\"hola\")" "unit")
 (prueba-rechazo "aridad: + con un argumento" "+(1)")
 
+;; Ambiente, let y variables
+(prueba "let y suma" "let a = 1, b = 2 in +(a, b) end" "3")
+(prueba "let: las ligaduras no se ven entre sí"
+  "let a = 1 in let a = 2, b = a in b end end" "1")
+(prueba "let anidado sombrea" "let x = 1 in let x = 2 in x end end" "2")
+(prueba-rechazo "variable no ligada" "x")
+
+;; Almacén: ref, deref, set
+(prueba "una celda" "let c = ref(0) in begin set c := 5; deref(c) end end" "5")
+(prueba "set devuelve unit" "let c = ref(0) in set c := 1 end" "unit")
+(prueba "celdas independientes"
+  "let a = ref(1), b = ref(2) in begin set a := 10; deref(b) end end" "2")
+(prueba "alias de una celda"
+  "let a = ref(1) in let b = a in begin set b := 7; deref(a) end end end" "7")
+(prueba-rechazo "deref de un entero" "deref(5)")
+(prueba-rechazo "set sobre un valor que no es referencia" "set 1 := 2")
+(begin
+  (inicializar-almacen!)
+  (let* ((i (nueva-celda! (int-val 9)))
+         (j (nueva-celda! (int-val 1))))
+    (begin
+      (escribir-celda! i (int-val 5))
+      (verificar "almacén: escritura y lectura" (valor->texto (leer-celda i)) "5")
+      (verificar "almacén: celdas distintas" (valor->texto (leer-celda j)) "1")
+      (verificar "almacén: tamaño" (number->string (tamano-almacen)) "2"))))
+(begin
+  (inicializar-almacen!)
+  (let llenar ((n 0))
+    (if (< n 100) (begin (nueva-celda! (int-val n)) (llenar (+ n 1))) #f))
+  (verificar "almacén: crece más allá de la capacidad inicial"
+             (valor->texto (leer-celda 99)) "99"))
+(begin
+  (inicializar-almacen!)
+  (verificar "almacén: referencia inexistente"
+             (with-handlers ((exn:fail? (lambda (e) "error")))
+               (valor->texto (leer-celda 0)))
+             "error"))
+
+;; Secuencia, condicionales y ciclo
+(prueba "begin devuelve el último" "begin 1; 2; 3 end" "3")
+(prueba "if rama then" "if true then 1 else 2 end" "1")
+(prueba "if rama else" "if false then 1 else 2 end" "2")
+(prueba "if con varios elif" "if false then 1 elif false then 2 elif true then 3 else 4 end" "3")
+(prueba-rechazo "if con prueba no booleana" "if 1 then 2 else 3 end")
+(prueba-rechazo "elif con prueba no booleana" "if false then 1 elif 5 then 2 else 3 end")
+(prueba "while devuelve unit" "while false do 1 end" "unit")
+(prueba "while acumula"
+  "let i = ref(0), s = ref(0) in
+   begin
+     while <(deref(i), 5) do
+       begin set i := +(deref(i), 1); set s := +(deref(s), deref(i)) end
+     end;
+     deref(s)
+   end end" "15")
+(prueba-rechazo "while con condición no booleana" "while 0 do 1 end")
+
+;; Procedimientos, clausuras y letrec
+(prueba "proc y apply" "let f = proc (x: int, y: int) +(x, y) end in apply f (3, 4) end" "7")
+(prueba "apply de proc anónimo" "apply proc (x: int) *(x, 2) end (21)" "42")
+(prueba "alcance léxico"
+  "let x = 1 in let f = proc (y: int) +(x, y) end in let x = 100 in apply f (1) end end end" "2")
+(prueba "clausura que recuerda su celda"
+  "let mk = proc (n: int) let c = ref(n) in proc () begin set c := +(deref(c), 1); deref(c) end end end end
+   in let k = apply mk (10) in begin apply k (); apply k () end end end" "12")
+(prueba "referencia como argumento"
+  "let c = ref(10), inc = proc (r: ref(int)) set r := +(deref(r), 1) end
+   in begin apply inc (c); apply inc (c); deref(c) end end" "12")
+(prueba-rechazo "apply de un valor que no es procedimiento" "apply 5 (1)")
+(prueba-rechazo "apply con aridad incorrecta" "let f = proc (x: int) x end in apply f (1, 2) end")
+(prueba "letrec factorial"
+  "letrec int fact (n: int) = if ==(n, 0) then 1 else *(n, apply fact (-(n, 1))) end
+   in apply fact (5) end" "120")
+(prueba "letrec recursión mutua"
+  "letrec bool par (n: int) = if ==(n, 0) then true else apply impar (-(n, 1)) end
+          bool impar (n: int) = if ==(n, 0) then false else apply par (-(n, 1)) end
+   in apply par (10) end" "true")
+(prueba "letrec con ciclo y celdas"
+  "letrec int suma (c: ref(int), n: int) =
+     if ==(n, 0) then deref(c) else begin set c := +(deref(c), n); apply suma (c, -(n, 1)) end end
+   in apply suma (ref(0), 4) end" "10")
+
 ;;; ==========================================================
 ;;; Segunda entrega: transacciones, registros y tipos
 ;;; ==========================================================

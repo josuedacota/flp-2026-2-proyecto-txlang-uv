@@ -479,11 +479,67 @@
 ;;; ==========================================================
 ;;; 5. TAD almacén
 ;;; ==========================================================
-;; Celdas que se reservan con ref, se leen con deref y se escriben con set.
-;; En la primera entrega las escrituras son definitivas; en la segunda el
-;; almacén lleva el registro que permite revertir un bloque atomic. Conviene
-;; diseñar la interfaz desde ahora pensando en eso.
-;; (PENDIENTE: lo escribe B.)
+;; Liga referencias (índices) a valores. Interfaz:
+;;   (inicializar-almacen!), (nueva-celda! v) -> índice,
+;;   (leer-celda i), (escribir-celda! i v), (tamano-almacen)
+;; Toda escritura pasa por nueva-celda! y escribir-celda!, que son los dos
+;; puntos donde la segunda entrega registrará los cambios de una transacción.
+
+(define capacidad-inicial 16)
+(define almacen-celdas (make-vector capacidad-inicial #f))
+(define almacen-tamano 0)
+
+(define inicializar-almacen!
+  (lambda ()
+    (set! almacen-celdas (make-vector capacidad-inicial #f))
+    (set! almacen-tamano 0)))
+
+(define tamano-almacen
+  (lambda () almacen-tamano))
+
+(define copiar-vector!
+  (lambda (origen destino n)
+    (let copiar ((i 0))
+      (if (< i n)
+          (begin (vector-set! destino i (vector-ref origen i))
+                 (copiar (+ i 1)))
+          destino))))
+
+(define crecer-almacen!
+  (lambda ()
+    (set! almacen-celdas
+          (copiar-vector! almacen-celdas
+                          (make-vector (* 2 (vector-length almacen-celdas)) #f)
+                          almacen-tamano))))
+
+(define nueva-celda!
+  (lambda (v)
+    (begin
+      (if (= almacen-tamano (vector-length almacen-celdas))
+          (crecer-almacen!)
+          #f)
+      (vector-set! almacen-celdas almacen-tamano v)
+      (set! almacen-tamano (+ almacen-tamano 1))
+      (- almacen-tamano 1))))
+
+(define verificar-celda
+  (lambda (operacion i)
+    (if (and (integer? i) (>= i 0) (< i almacen-tamano))
+        #t
+        (eopl:error operacion "la referencia ~s no existe en el almacén" i))))
+
+(define leer-celda
+  (lambda (i)
+    (begin
+      (verificar-celda 'deref i)
+      (vector-ref almacen-celdas i))))
+
+(define escribir-celda!
+  (lambda (i v)
+    (begin
+      (verificar-celda 'set i)
+      (vector-set! almacen-celdas i v))))
+
 
 ;;; ==========================================================
 ;;; 7. Chequeador de tipos (segunda entrega)
@@ -688,7 +744,59 @@
 ;;; ==========================================================
 ;;; 8. Interpretador
 ;;; ==========================================================
-;; (ESQUELETO: B lo completa. Por ahora evalúa literales y variables.)
+;; Los argumentos y las ligaduras se evalúan de izquierda a derecha.
+;; atomic, abort, new y field llegan en la segunda entrega.
+
+(define evaluar-lista
+  (lambda (exps amb)
+    (if (null? exps)
+        '()
+        (let ((v (value-of (car exps) amb)))
+          (cons v (evaluar-lista (cdr exps) amb))))))
+
+(define evaluar-secuencia
+  (lambda (ultimo exps amb)
+    (if (null? exps)
+        ultimo
+        (evaluar-secuencia (value-of (car exps) amb) (cdr exps) amb))))
+
+(define evaluar-prueba
+  (lambda (contexto exp amb)
+    (let ((v (value-of exp amb)))
+      (cases valor v
+        (bool-val (b) b)
+        (else (eopl:error contexto "la prueba debe ser bool y se encontró ~a"
+                          (tipo-valor v)))))))
+
+(define evaluar-condicional
+  (lambda (pruebas ramas sino amb)
+    (cond ((null? pruebas) (value-of sino amb))
+          ((evaluar-prueba 'if (car pruebas) amb) (value-of (car ramas) amb))
+          (else (evaluar-condicional (cdr pruebas) (cdr ramas) sino amb)))))
+
+(define evaluar-ciclo
+  (lambda (prueba cuerpo amb)
+    (if (evaluar-prueba 'while prueba amb)
+        (begin (value-of cuerpo amb)
+               (evaluar-ciclo prueba cuerpo amb))
+        (unit-val))))
+
+(define verificar-no-vacio
+  (lambda (contexto ids)
+    (if (null? ids)
+        (eopl:error contexto "se requiere al menos una ligadura")
+        #t)))
+
+(define aplicar-procedimiento
+  (lambda (f args)
+    (cases valor f
+      (proc-val (ids cuerpo amb-def)
+        (if (= (length ids) (length args))
+            (value-of cuerpo (extender-ambiente ids args amb-def))
+            (eopl:error 'apply "el procedimiento espera ~s argumento(s) y recibió ~s"
+                        (length ids) (length args))))
+      (else (eopl:error 'apply "se esperaba un procedimiento y se encontró ~a"
+                        (tipo-valor f))))))
 
 (define value-of
   (lambda (exp amb)
@@ -701,9 +809,39 @@
       (false-exp () (bool-val #f))
       (unit-exp () (unit-val))
       (var-exp (id) (buscar-ambiente amb id))
+      (let-exp (ids exps cuerpo)
+        (begin
+          (verificar-no-vacio 'let ids)
+          (value-of cuerpo (extender-ambiente ids (evaluar-lista exps amb) amb))))
+      (ref-exp (e)
+        (ref-val (nueva-celda! (value-of e amb))))
+      (deref-exp (e)
+        (leer-celda (valor->ref (value-of e amb))))
+      (set-exp (e1 e2)
+        (let* ((r (valor->ref (value-of e1 amb)))
+               (v (value-of e2 amb)))
+          (begin (escribir-celda! r v)
+                 (unit-val))))
+      (begin-exp (e1 es)
+        (evaluar-secuencia (value-of e1 amb) es amb))
+      (if-exp (prueba entonces pruebas-elif ramas-elif sino)
+        (evaluar-condicional (cons prueba pruebas-elif)
+                             (cons entonces ramas-elif)
+                             sino amb))
+      (while-exp (prueba cuerpo)
+        (evaluar-ciclo prueba cuerpo amb))
       (prim-exp (p args)
-        (aplicar-primitiva p (map (lambda (e) (value-of e amb)) args)))
-      (else (eopl:error 'value-of "todavía no implementado")))))
+        (aplicar-primitiva p (evaluar-lista args amb)))
+      (proc-exp (ids tipos cuerpo)
+        (proc-val ids cuerpo amb))
+      (apply-exp (rator rands)
+        (let ((f (value-of rator amb)))
+          (aplicar-procedimiento f (evaluar-lista rands amb))))
+      (letrec-exp (tipos-ret nombres idss tiposs cuerpos cuerpo)
+        (begin
+          (verificar-no-vacio 'letrec nombres)
+          (value-of cuerpo (extender-ambiente-rec nombres idss cuerpos amb))))
+      (else (eopl:error 'value-of "se implementa en la segunda entrega")))))
 
 ;;; ==========================================================
 ;;; 9. Interfaz
@@ -713,6 +851,7 @@
     (let ((pgm (scan&parse texto)))
       (begin
         (chequear-programa pgm)
+        (inicializar-almacen!)
         (cases programa pgm
           (un-programa (decls cuerpo) (value-of cuerpo (ambiente-vacio))))))))
 
